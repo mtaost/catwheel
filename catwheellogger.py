@@ -1,9 +1,6 @@
 import time
 from enum import Enum
-from dao.influxdb_dao import InfluxDBDAO
-import threading
 import uuid
-import gpiozero
 
 class WheelState(Enum):
     SLEEP = "sleep"
@@ -36,6 +33,7 @@ class CatwheelLogger:
         self.sensor.when_activated = self._sensor_interrupt
         self.log = logger
         self.WHEEL_SEGMENT_LENGTH = self.WHEEL_CIRCUMFERENCE / self.NUM_MAGNETS
+        self._running = True
         self._initialize_measurement_vars()
 
     def _initialize_measurement_vars(self):
@@ -70,9 +68,13 @@ class CatwheelLogger:
         self.last_interrupt_time = current_time
         self.active = True
 
+    def stop(self):
+        """Request a clean exit from the logger loop."""
+        self._running = False
+
     def run(self):
         try:
-            while True:
+            while self._running:
                 if self.state == WheelState.SLEEP:
                     time.sleep(int(1 / self.SLEEP_POLL_FREQUENCY))
                     if not self.logged_wait:
@@ -119,7 +121,10 @@ class CatwheelLogger:
                         self.run_id = uuid.uuid4().hex
 
                         self.state = WheelState.SLEEP
-        except Exception as e:
-            self.log.exception("Encountered {e} Exiting...")
-            self.log.exception("Cleaning up gpios")
+        except Exception:
+            self.log.exception("Encountered an error; exiting.")
+            raise
+        finally:
+            self.log.info("Cleaning up GPIO and database resources.")
             self.sensor.close()
+            self.dao.close()

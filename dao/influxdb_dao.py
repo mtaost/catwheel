@@ -1,5 +1,4 @@
 import influxdb_client
-from influxdb_client.client.write_api import SYNCHRONOUS
 
 class InfluxDBDAO:
     def __init__(self, url, token, org, bucket):
@@ -37,6 +36,7 @@ class InfluxDBDAO:
             bucket=self.bucket,
             org=self.client.org
         )
+
         self.delete_api.delete(
             start="1970-01-01T00:00:00Z",
             stop="2100-01-01T00:00:00Z",
@@ -44,6 +44,9 @@ class InfluxDBDAO:
             bucket=self.bucket,
             org=self.client.org
         )
+
+    def close(self):
+        self.client.close()
 
 # Example usage:
 # dao = InfluxDBDAO(url="http://localhost:8086", token="my-token", org="my-org", bucket="my-bucket")
