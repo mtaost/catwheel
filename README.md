@@ -1,7 +1,19 @@
 # Catwheel
 
-Catwheel reads a Hall-effect sensor on BCM GPIO 17 and writes wheel-speed and
-completed-run data to InfluxDB.
+Lumi loves to run:
+
+https://github.com/user-attachments/assets/9d50facd-fc38-4fd6-8d27-cc8fcf8d2b0d
+
+Catwheel uses a Raspberry Pi, magnets, a Hall-effect sensor, InfluxDB, and
+Grafana to measure how fast and how far each catwheel run goes. It records
+speed samples and completed-run metadata in a locally hosted InfluxDB database.
+
+<img width="2243" height="1013" alt="Single-run Grafana dashboard" src="https://github.com/user-attachments/assets/3ff5e46e-92a6-488e-9114-a68280e5b4d3" />
+
+The aggregated dashboard tracks cumulative distance plus maximum and average
+speed over a selected time window.
+
+<img width="2250" height="1089" alt="Aggregate Grafana dashboard" src="https://github.com/user-attachments/assets/8d1db0a9-6ac2-425a-b0bc-4dfc7690ca12" />
 
 ## Local use
 
@@ -69,3 +81,9 @@ To stop it from starting at boot, run `sudo systemctl disable --now catwheel.ser
 The application configures GPIO 17 as a pulled-up digital input, so it expects
 a Hall sensor output that pulls the pin low when a magnet passes. Pi GPIO pins
 are 3.3 V only; do not connect a 5 V sensor output directly to GPIO 17.
+
+## Roadmap
+
+- RGB Matrix speed display so a camera can see the MPH output.
+- Telegram notifications with a graph snapshot when events are captured.
+- Cat identification based on running pattern (Miso is not as elegant).
