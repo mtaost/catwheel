@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Admin settings · Catwheel{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">ADMIN</p><h1>Detection settings</h1><p>Changes are saved immediately and used when the next run begins.</p></div></section>
+<section class="settings-card"><form id="settings-form"><input type="hidden" name="expected_revision" value="{{ settings.revision }}">
+  <label>Inactivity timeout (seconds)<input type="number" step="1" min="1" name="idle_timeout_seconds" value="{{ settings.idle_timeout_seconds }}"><small>Ends a run after no accepted activity for this long.</small></label>
+  <label>Minimum duration (seconds)<input type="number" step="0.1" min="0.1" name="min_duration_seconds" value="{{ settings.min_duration_seconds }}"><small>Shorter runs are deleted.</small></label>
+  <label>Minimum peak speed (mph)<input type="number" step="0.1" min="0.1" name="min_peak_speed_mph" value="{{ settings.min_peak_speed_mph }}"><small>A qualifying run must reach this speed.</small></label>
+  <label>Minimum distance (ft)<input type="number" step="0.1" min="0.1" name="min_distance_ft" value="{{ settings.min_distance_ft }}"><small>Shorter distances are deleted.</small></label>
+  <label>Maximum valid speed (mph)<input type="number" step="0.1" min="0.1" name="max_valid_speed_mph" value="{{ settings.max_valid_speed_mph }}"><small>Faster sensor spikes are ignored entirely.</small></label>
+  <label>Sudden-drop correction (mph)<input type="number" step="0.1" min="0" name="drop_correction_mph" value="{{ settings.drop_correction_mph }}"><small>Large drops are treated as a missed reading.</small></label>
+  <button type="submit">Save settings</button><p id="settings-status" aria-live="polite">Revision {{ settings.revision }} is saved and applies when the next run begins.</p>
+</form></section>
+<script>
+  document.getElementById('settings-form').addEventListener('submit', async event => {
+    event.preventDefault(); const form = new FormData(event.currentTarget); const body = Object.fromEntries(form.entries());
+    for (const key of Object.keys(body)) body[key] = Number(body[key]);
+    const response = await fetch('/api/v1/admin/detection-settings', {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const status = document.getElementById('settings-status'); const result = await response.json();
+    if (!response.ok) { status.textContent = result.detail || 'Could not save settings.'; return; }
+    event.currentTarget.expected_revision.value = result.revision; status.textContent = `Saved revision ${result.revision}; it will apply to the next run.`;
+  });
+</script>
+{% endblock %}

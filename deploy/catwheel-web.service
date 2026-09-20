@@ -1,20 +1,21 @@
 [Unit]
-Description=Catwheel GPIO logger
+Description=Catwheel web dashboard
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=simple
-User=pi
-Group=pi
-SupplementaryGroups=gpio catwheel
+User=catwheel-web
+Group=catwheel
 WorkingDirectory=/home/pi/projects/catwheel
-EnvironmentFile=/etc/catwheel/catwheel.env
-ExecStart=/home/pi/projects/catwheel/venv/bin/python /home/pi/projects/catwheel/main.py
+EnvironmentFile=/etc/catwheel/web.env
+ExecStart=/home/pi/projects/catwheel/venv/bin/uvicorn --factory web.app:create_app --host 0.0.0.0 --port 8080
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/catwheel
 StandardOutput=journal
 StandardError=journal
 

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Run · Catwheel{% endblock %}
+{% block content %}
+<p><a class="back-link" href="/">← Dashboard</a></p>
+<section class="page-heading"><div><p class="eyebrow">RUN DETAIL</p><h1>{{ run.timestamp[:16].replace('T', ' ') }}</h1><p>Settings revision {{ run.settings_revision }}{% if run.rejected_sample_count %} · {{ run.rejected_sample_count }} rejected sensor samples{% endif %}</p></div></section>
+<section class="chart-card detail-chart"><div><h2>Speed trace</h2><p>Scroll/pinch to zoom, drag to pan.</p></div><canvas id="speed-chart"></canvas><button type="button" id="reset-zoom">Reset zoom</button></section>
+<section class="summary-card run-summary" aria-label="Run summary"><article><span>Distance</span><strong>{{ '%.0f'|format(run.distance_travelled_ft) }} ft</strong></article><article><span>Duration</span><strong>{{ '%.0f'|format(run.run_duration_seconds) }} s</strong></article><article><span>Average speed</span><strong>{{ '%.1f'|format(run.avg_speed_mph) }} mph</strong></article><article><span>Maximum speed</span><strong>{{ '%.1f'|format(run.max_speed_mph) }} mph</strong></article></section>
+<section class="label-card"><h2>Who ran?</h2><p>Manual labels become training data for a future cat classifier.</p><div class="label-actions">{% for cat in cat_ids %}<button class="label-button {% if run.label == cat %}selected{% endif %}" data-cat="{{ cat }}">{{ cat }}</button>{% endfor %}</div><p id="label-status" aria-live="polite"></p></section>
+<script src="{{ url_for('static', path='vendor/chart.umd.js') }}"></script>
+<script src="{{ url_for('static', path='vendor/hammer.min.js') }}"></script>
+<script src="{{ url_for('static', path='vendor/chartjs-plugin-zoom.min.js') }}"></script>
+<script>
+  const samples = {{ samples | tojson }};
+  const runId = {{ run.run_id | tojson }};
+  let speedChart;
+  if (window.Chart && samples.length) {
+    if (window.ChartZoom) Chart.register(window.ChartZoom);
+    speedChart = new Chart(document.getElementById('speed-chart'), {type: 'line', data: {labels: samples.map(s => new Date(s.timestamp).toLocaleTimeString()), datasets: [{label: 'Speed (mph)', data: samples.map(s => s.speed_mph), borderColor: '#ffb86c', backgroundColor: 'rgba(255,184,108,.2)', pointRadius: 3, tension: .25}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: true, title: {display: true, text: 'mph'}}}, plugins: {zoom: {pan: {enabled: true, mode: 'x'}, zoom: {wheel: {enabled: true}, pinch: {enabled: true}, drag: {enabled: true}, mode: 'x'}}}}});
+  }
+  document.getElementById('reset-zoom').addEventListener('click', () => speedChart && speedChart.resetZoom());
+  document.querySelectorAll('.label-button').forEach(button => button.addEventListener('click', async () => {
+    const response = await fetch(`/api/v1/runs/${runId}/label`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cat_id: button.dataset.cat})});
+    const status = document.getElementById('label-status');
+    if (!response.ok) { status.textContent = 'Could not save the label.'; return; }
+    document.querySelectorAll('.label-button').forEach(item => item.classList.toggle('selected', item === button));
+    status.textContent = `Saved ${button.dataset.cat}.`;
+  }));
+</script>
+{% endblock %}

@@ -18,13 +18,25 @@ class InfluxDBDAO:
             .time(int(time_ns * 1000000000), influxdb_client.WritePrecision.NS)
         self.write_api.write(bucket=self.bucket, org=self.client.org, record=point)
 
-    def write_run_metadata(self, run_id, time_ns, max_speed, avg_speed, distance_travelled, run_duration):
+    def write_run_metadata(
+        self,
+        run_id,
+        time_ns,
+        max_speed,
+        avg_speed,
+        distance_travelled,
+        run_duration,
+        settings_revision=1,
+        rejected_sample_count=0,
+    ):
         point = influxdb_client.Point("catwheel_run_metadata") \
             .tag("run_id", run_id) \
             .field("max_speed_mph", max_speed) \
             .field("avg_speed_mph", avg_speed) \
             .field("distance_travelled_ft", distance_travelled) \
             .field("run_duration_seconds", run_duration) \
+            .field("settings_revision", settings_revision) \
+            .field("rejected_sample_count", rejected_sample_count) \
             .time(int(time_ns * 1000000000), influxdb_client.WritePrecision.NS)
         self.write_api.write(bucket=self.bucket, org=self.client.org, record=point)
 

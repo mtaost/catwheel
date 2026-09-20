@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Catwheel{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">ACTIVITY TRACKER</p><h1>Wheel health</h1></div>
+</section>
+<section class="chart-card{% if not dashboard.runs %} empty-chart{% endif %}">
+  {% if dashboard.runs %}
+  <div><h2>{{ dashboard.trend_title }}</h2><p>{{ dashboard.trend_description }}</p></div>
+  <canvas id="activity-chart" aria-label="Daily activity chart"></canvas>
+  {% else %}
+  <div class="empty-chart-content">
+    <img class="empty-cat" src="{{ url_for('static', path='images/sleeping-cat-empty.png') }}" alt="A sleeping curled-up cat">
+    <h2>Quiet paws</h2>
+    <p>No wheel activity in this period.</p>
+  </div>
+  {% endif %}
+</section>
+<form class="filters" id="dashboard-filters" method="get" data-active-range="{{ dashboard.range_key }}">
+    <div class="range-picker" aria-label="Date range">
+      <span class="filter-label">Range</span>
+      <div class="range-actions" role="group" aria-label="Quick date ranges">
+        <button type="button" class="range-button" data-range="12h" aria-pressed="{{ 'true' if dashboard.range_key == '12h' else 'false' }}">12h</button>
+        <button type="button" class="range-button" data-range="1d" aria-pressed="{{ 'true' if dashboard.range_key == '1d' else 'false' }}">1d</button>
+        <button type="button" class="range-button" data-range="7d" aria-pressed="{{ 'true' if dashboard.range_key == '7d' else 'false' }}">7d</button>
+        <button type="button" class="range-button" data-range="mo" aria-pressed="{{ 'true' if dashboard.range_key == 'mo' else 'false' }}">1mo</button>
+        <button type="button" class="range-button" data-range="custom" aria-controls="custom-date-range" aria-expanded="{{ 'true' if dashboard.range_key == 'custom' else 'false' }}" aria-pressed="{{ 'true' if dashboard.range_key == 'custom' else 'false' }}">Custom</button>
+      </div>
+    </div>
+    <input id="range-key" type="hidden" {% if dashboard.range_key == '12h' %}name="range" value="12h"{% endif %}>
+    <div id="custom-date-range" class="custom-date-range{% if dashboard.range_key != 'custom' %} is-hidden{% endif %}">
+      <label>From <input id="start-date" type="date" name="start" value="{{ dashboard.start_date }}"></label>
+      <label>To <input id="end-date" type="date" name="end" value="{{ dashboard.end_date }}"></label>
+      <button type="submit">Apply</button>
+    </div>
+    <label class="cat-filter">Cat <select name="cat" aria-label="Filter by cat"><option value="">All cats</option>{% for cat in cat_ids %}<option value="{{ cat }}" {% if dashboard.cat_id == cat %}selected{% endif %}>{{ cat }}</option>{% endfor %}</select></label>
+    <button class="cat-apply" type="submit">Apply</button>
+ </form>
+<section class="summary-card dashboard-summary" aria-label="Activity summary">
+  <article><span>Total distance</span><strong>{{ '%.0f'|format(dashboard.summary.total_distance_ft) }} ft</strong></article>
+  <article><span>Active time</span><strong>{{ '%.1f'|format(dashboard.summary.active_seconds / 60) }} min</strong></article>
+  <article><span>Completed runs</span><strong>{{ dashboard.summary.run_count }}</strong></article>
+  <article><span>Fastest speed</span><strong>{{ '%.1f'|format(dashboard.summary.fastest_speed_mph) }} mph</strong></article>
+</section>
+<section class="table-card">
+  <div class="section-heading"><div><h2>Recent runs</h2><p>{% if dashboard.pagination.total %}Showing {{ dashboard.pagination.first }}–{{ dashboard.pagination.last }} of {{ dashboard.pagination.total }} runs.{% else %}No completed runs in this period.{% endif %}</p></div></div>
+  {% if dashboard.display_runs %}<div class="run-list">{% for run in dashboard.display_runs %}
+    <a class="run-row" href="/runs/{{ run.run_id }}">
+      <time class="run-when" datetime="{{ run.timestamp }}"><strong>{{ run.short_time }}</strong><span>{{ run.short_date }}</span></time>
+      <span class="run-cat">{{ run.label }}</span>
+      <span class="run-metrics"><span><strong>{{ '%.0f'|format(run.distance_travelled_ft) }}</strong> ft</span><span><strong>{{ '%.0f'|format(run.run_duration_seconds) }}</strong> s</span><span><strong>{{ '%.1f'|format(run.avg_speed_mph) }}</strong> avg</span><span><strong>{{ '%.1f'|format(run.max_speed_mph) }}</strong> max</span></span>
+    </a>
+  {% endfor %}</div>
+  {% if dashboard.pagination.pages > 1 %}<nav class="pagination" aria-label="Recent runs pages">{% if dashboard.pagination.previous_url %}<a href="{{ dashboard.pagination.previous_url }}">← Newer</a>{% else %}<span></span>{% endif %}<span>Page {{ dashboard.pagination.page }} of {{ dashboard.pagination.pages }}</span>{% if dashboard.pagination.next_url %}<a href="{{ dashboard.pagination.next_url }}">Older →</a>{% else %}<span></span>{% endif %}</nav>{% endif %}
+  {% endif %}
+</section>
+<script src="{{ url_for('static', path='vendor/chart.umd.js') }}"></script>
+<script src="{{ url_for('static', path='vendor/hammer.min.js') }}"></script>
+<script src="{{ url_for('static', path='vendor/chartjs-plugin-zoom.min.js') }}"></script>
+<script>
+  (() => {
+    const form = document.getElementById('dashboard-filters');
+    const startInput = document.getElementById('start-date');
+    const endInput = document.getElementById('end-date');
+    const customRange = document.getElementById('custom-date-range');
+    const rangeKey = document.getElementById('range-key');
+    const customButton = form.querySelector('[data-range="custom"]');
+    const buttons = [...form.querySelectorAll('.range-button')];
+    const rangeDays = { '1d': 1, '7d': 7, mo: 30 };
+
+    const dateValue = (date) => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+    const selectRange = (range) => buttons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.range === range)));
+    const showCustomRange = () => {
+      customRange.classList.remove('is-hidden');
+      rangeKey.removeAttribute('name');
+      customButton.setAttribute('aria-expanded', 'true');
+      selectRange('custom');
+      startInput.focus();
+    };
+
+    buttons.forEach((button) => button.addEventListener('click', () => {
+      const range = button.dataset.range;
+      if (range === 'custom') {
+        showCustomRange();
+        return;
+      }
+      if (range === '12h') {
+        rangeKey.name = 'range';
+        rangeKey.value = '12h';
+        form.submit();
+        return;
+      }
+      rangeKey.removeAttribute('name');
+      const end = new Date();
+      const start = new Date(end);
+      start.setDate(end.getDate() - (rangeDays[range] - 1));
+      startInput.value = dateValue(start);
+      endInput.value = dateValue(end);
+      form.submit();
+    }));
+
+    startInput.addEventListener('change', () => { endInput.min = startInput.value; });
+    endInput.addEventListener('change', () => { startInput.max = endInput.value; });
+    form.querySelector('select[name="cat"]').addEventListener('change', () => form.submit());
+  })();
+
+  const trend = {{ dashboard.trend | tojson }};
+  const canvas = document.getElementById('activity-chart');
+  if (window.Chart && canvas && trend.length) {
+    if (window.ChartZoom) Chart.register(window.ChartZoom);
+    new Chart(canvas, {type: 'bar', data: {labels: trend.map(d => d.label), datasets: [{label: 'Distance (ft)', data: trend.map(d => d.distance_ft), backgroundColor: '#66d9a6', borderRadius: 6}]}, options: {responsive: true, maintainAspectRatio: false, plugins: {legend: {display: false}, zoom: {pan: {enabled: true, mode: 'x'}, zoom: {wheel: {enabled: true}, pinch: {enabled: true}, mode: 'x'}}}, scales: {x: {ticks: {autoSkip: true, maxTicksLimit: 8}}, y: {beginAtZero: true}}}});
+  }
+</script>
+{% endblock %}

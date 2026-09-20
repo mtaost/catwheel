@@ -1,5 +1,6 @@
 from catwheellogger import CatwheelLogger
 from dao.influxdb_dao import InfluxDBDAO
+from settings_store import SettingsStore
 import gpiozero
 import logging
 import os
@@ -12,6 +13,7 @@ INFLUXDB_TOKEN = os.environ.get("INFLUXDB_TOKEN")
 BUCKET = os.environ.get("BUCKET")
 ORG = os.environ.get("ORG")
 DATABASE_URL = os.environ.get("DATABASE_URL")
+CATWHEEL_STATE_DB = os.environ.get("CATWHEEL_STATE_DB", "/var/lib/catwheel/state.db")
 
 
 def validate_configuration():
@@ -41,7 +43,8 @@ def main():
     )
 
     dao = InfluxDBDAO(url=DATABASE_URL, token=INFLUXDB_TOKEN, org=ORG, bucket=BUCKET)
-    catwheel_logger = CatwheelLogger(dao, sensor, logger)
+    settings_store = SettingsStore(CATWHEEL_STATE_DB)
+    catwheel_logger = CatwheelLogger(dao, sensor, logger, settings_store=settings_store)
 
     def request_shutdown(signum, _frame):
         logger.info("Received signal %s; shutting down.", signum)

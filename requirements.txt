@@ -11,3 +11,7 @@ rpi-lgpio==0.6
 six==1.17.0
 typing_extensions==4.12.2
 urllib3==2.3.0
+fastapi==0.115.12
+uvicorn==0.34.2
+jinja2==3.1.6
+httpx==0.28.1

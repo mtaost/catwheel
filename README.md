@@ -76,6 +76,64 @@ for the network, restarts after failures, and writes logs to the system journal.
 To apply a code or configuration change, run `sudo systemctl restart catwheel.service`.
 To stop it from starting at boot, run `sudo systemctl disable --now catwheel.service`.
 
+## Web dashboard
+
+The dashboard is a separate service for the trusted home LAN. It is available
+without a login to any device on that network. It reads completed runs from
+InfluxDB with a **read-only** token and stores
+editable detection settings plus manual cat labels in a local SQLite database.
+It does not replace the existing Grafana dashboards.
+
+The dashboard uses HTTP by design for a trusted LAN. Do not expose port 8080
+to the internet; put it behind HTTPS before allowing remote access.
+
+### Install the dashboard service
+
+Install the updated Python dependencies, create the shared state directory and
+least-privilege service account, then create protected configuration files.
+The `catwheel` group lets the GPIO logger read the settings while the web
+service writes them; the web service itself has no GPIO access.
+
+```bash
+cd /home/pi/projects/catwheel
+./venv/bin/pip install -r requirements.txt
+sudo groupadd --force catwheel
+sudo useradd --system --gid catwheel --home-dir /nonexistent --shell /usr/sbin/nologin catwheel-web
+sudo usermod -aG catwheel pi
+sudo install -d -o pi -g catwheel -m 2770 /var/lib/catwheel
+sudoedit /etc/catwheel/catwheel.env
+sudo test ! -e /etc/catwheel/web.env && sudo install -o root -g catwheel -m 640 web.env.example /etc/catwheel/web.env
+sudoedit /etc/catwheel/web.env
+```
+
+Add `CATWHEEL_STATE_DB=/var/lib/catwheel/state.db` to the existing logger
+configuration. The guarded `install` command intentionally refuses to overwrite
+an existing dashboard configuration.
+
+Create an InfluxDB token that has read access only to the configured bucket and
+place it in `INFLUXDB_READ_TOKEN` in `web.env`; never put that value in this
+repository.
+
+Install both service units after the group setup, then restart the logger so it
+can use the shared settings database:
+
+```bash
+sudo install -o root -g root -m 644 deploy/catwheel.service /etc/systemd/system/catwheel.service
+sudo install -o root -g root -m 644 deploy/catwheel-web.service /etc/systemd/system/catwheel-web.service
+sudo systemctl daemon-reload
+sudo systemctl restart catwheel.service
+sudo systemctl enable --now catwheel-web.service
+```
+
+Visit `http://<logger-pi-hostname-or-ip>:8080`. The home page defaults to the
+last 30 days and supports cat/date filtering. Run details provide an interactive
+speed trace and manual `Lumi`, `Miso`, or `unknown` labels. Detection setting
+changes are saved atomically and apply only when the logger begins its next run.
+
+The logger records the applied settings revision and the count of rejected
+over-limit speed samples in new completed-run metadata. Existing historical
+runs and Grafana dashboards remain valid.
+
 ## Hardware assumptions
 
 The application configures GPIO 17 as a pulled-up digital input, so it expects
@@ -87,3 +145,8 @@ are 3.3 V only; do not connect a 5 V sensor output directly to GPIO 17.
 - RGB Matrix speed display so a camera can see the MPH output.
 - Telegram notifications with a graph snapshot when events are captured.
 - Cat identification based on running pattern (Miso is not as elegant).
+
+The logger now has an inactive event-publisher boundary with versioned future
+topics `catwheel/v1/live-speed` and `catwheel/v1/run-completed`. A future MQTT
+publisher/outbox can deliver those to the display and Telegram services without
+making network outages affect sensor logging.

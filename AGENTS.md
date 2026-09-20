@@ -20,6 +20,21 @@ Catwheel is a Raspberry Pi service that reads a Hall-effect sensor on BCM GPIO
   example file. Redact values in diagnostics.
 - Treat any local token files as sensitive. Do not assume an older token is
   valid; verify it against InfluxDB only with explicit user approval.
+- The dashboard configuration is `/etc/catwheel/web.env`, owned by
+  `root:catwheel` with mode `640`. It contains the dashboard's read-only
+  InfluxDB token and must never be committed or printed.
+
+## Dashboard runtime
+
+- The LAN dashboard is served by `catwheel-web.service` on port 8080. Its
+  source unit is `deploy/catwheel-web.service`; it runs as `catwheel-web` and
+  must not gain GPIO access.
+- Dashboard settings and manual labels share `/var/lib/catwheel/state.db` with
+  the logger. Preserve group-writable access for the `catwheel` group; do not
+  add database files to version control.
+- The dashboard intentionally has no login for the trusted home LAN. Do not
+  expose port 8080 outside that network without adding appropriate HTTPS and
+  access controls.
 
 ## Useful commands
 
@@ -32,12 +47,16 @@ Run these from `/home/pi/projects/catwheel`.
 # Syntax check without touching hardware or InfluxDB.
 ./venv/bin/python -m py_compile main.py catwheellogger.py dao/influxdb_dao.py
 
+# Focused dashboard checks: use fakes only, never production InfluxDB or GPIO.
+./venv/bin/python -m unittest discover -s test -p 'test_web.py' -v
+
 # Inspect the running service and its logs.
 sudo systemctl status catwheel.service
 journalctl -u catwheel.service -f
 
 # Apply code or configuration changes after validation.
 sudo systemctl restart catwheel.service
+sudo systemctl restart catwheel-web.service
 ```
 
 Installing or enabling the service changes host state. Do that only when the
@@ -65,7 +84,7 @@ sudo systemctl enable --now catwheel.service
 
 - Keep `README.md`, `catwheel.env.example`, and the systemd unit aligned with
   any startup, configuration, or deployment change.
-- Validate Python compilation and `systemd-analyze verify deploy/catwheel.service`
-  after modifying runtime or service files.
+- Validate Python compilation and `systemd-analyze verify` for every modified
+  service unit after modifying runtime or service files.
 - Do not test `main.py` against production InfluxDB or live GPIO unless the
   user explicitly requests it. Prefer `test/gpiotest.py` for hardware checks.
