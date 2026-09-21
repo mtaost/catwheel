@@ -13,13 +13,13 @@ import httpx
 from events import NullEventPublisher
 from settings_store import SettingsStore
 from telegram_notifier import (
-    TIME_OF_DAY_MESSAGES,
+    DURATION_REMARKS,
+    SPEED_REMARKS,
     TelegramEventPublisher,
     caption_for_run,
     performance_remarks,
     publisher_from_environment,
     render_speed_graph,
-    time_of_day_message,
 )
 
 
@@ -71,38 +71,22 @@ class TelegramNotifierTests(unittest.TestCase):
     def test_caption_and_png_rendering(self):
         caption = caption_for_run(PAYLOAD)
         self.assertIn("🐈 Catwheel run complete", caption)
-        self.assertIn(time_of_day_message(PAYLOAD), caption)
         self.assertIn("Peak speed: 8.5 mph", caption)
         self.assertEqual(performance_remarks(PAYLOAD), ())
         image = render_speed_graph(PAYLOAD)
         self.assertTrue(image.startswith(b"\x89PNG\r\n\x1a\n"))
 
-    def test_time_of_day_and_performance_copy(self):
-        early_morning = {
-            **PAYLOAD,
-            "run_id": "morning-run",
-            "time_ns": datetime(2026, 9, 20, 6, tzinfo=timezone.utc).timestamp(),
-        }
-        overnight = {
-            **PAYLOAD,
-            "run_id": "night-run",
-            "time_ns": datetime(2026, 9, 20, 0, tzinfo=timezone.utc).timestamp(),
-        }
-        self.assertIn(
-            time_of_day_message(early_morning, timezone.utc),
-            TIME_OF_DAY_MESSAGES["early_morning"],
-        )
-        self.assertIn(
-            time_of_day_message(overnight, timezone.utc),
-            TIME_OF_DAY_MESSAGES["overnight"],
-        )
-        standout = {**PAYLOAD, "max_speed": 10.1, "run_duration": 60.1}
+    def test_performance_copy(self):
+        low_short = {**PAYLOAD, "max_speed": 3.0, "run_duration": 8.0}
+        dead_band = {**PAYLOAD, "max_speed": 6.0, "run_duration": 40.0}
+        high_long = {**PAYLOAD, "max_speed": 10.1, "run_duration": 60.1}
+        self.assertIn(performance_remarks(low_short)[0], SPEED_REMARKS["low"][2])
+        self.assertIn(performance_remarks(low_short)[1], DURATION_REMARKS["low"][2])
+        self.assertEqual(performance_remarks(dead_band), ())
+        self.assertIn(performance_remarks(high_long)[0], SPEED_REMARKS["high"][2])
+        self.assertIn(performance_remarks(high_long)[1], DURATION_REMARKS["high"][2])
         self.assertEqual(
-            performance_remarks(standout),
-            (
-                "Endurance star: over a minute on the wheel!",
-                "Speed demon alert: over 10 mph!",
-            ),
+            performance_remarks(high_long)[-1], "Speed demon alert: over 10 mph!"
         )
 
     def test_new_speed_and_duration_records_are_added_to_the_outbox_payload(self):
@@ -126,9 +110,10 @@ class TelegramNotifierTests(unittest.TestCase):
         self.assertEqual(
             performance_remarks(notification["payload"]),
             (
+                performance_remarks(record_breaker)[0],
+                performance_remarks(record_breaker)[1],
                 "🏆 New speed record! The wheel has a new blur.",
                 "⏱️ New duration record! That was a marathon session.",
-                "Endurance star: over a minute on the wheel!",
                 "Speed demon alert: over 10 mph!",
             ),
         )

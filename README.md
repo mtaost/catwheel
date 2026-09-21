@@ -79,9 +79,10 @@ To stop it from starting at boot, run `sudo systemctl disable --now catwheel.ser
 ## Telegram run notifications
 
 The logger can send one speed-graph photo for every completed qualifying run.
-Its caption includes peak and average speed, distance, duration, and a playful
-message based on the logger's local time of day. Runs longer than 60 seconds or
-faster than 10 mph receive an extra endurance or speed-demon remark. It queues
+Its caption includes peak and average speed, distance, and duration. It adds a low remark at 4 mph
+or 10 seconds and below, and a high remark at 10 mph or 60 seconds and above;
+the middle ranges intentionally have no speed/duration remark. Speeds over 10 mph
+receive an extra speed-demon remark. It queues
 notifications in the shared state database before delivery, so a temporary
 network or Telegram outage does not affect sensor logging; queued messages are
 retried with backoff and may be delivered more than once after an ambiguous

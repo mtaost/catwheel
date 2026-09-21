@@ -29,58 +29,78 @@ TELEGRAM_API_URL = "https://api.telegram.org"
 POLL_INTERVAL_SECONDS = 30.0
 INITIAL_RETRY_SECONDS = 5.0
 MAX_RETRY_SECONDS = 60.0 * 60.0
-TIME_OF_DAY_MESSAGES = {
-    "overnight": (
-        "A midnight stroll on the wheel—what a night owl!",
-        "Late-night laps are in the books!",
+SPEED_REMARKS = {
+    "low": (
+        None,
+        4.0,
+        (
+            "A walk in the park",
+            "Taking the scenic route",
+        ),
     ),
-    "early_morning": (
-        "An early-morning jog before the day gets going!",
-        "Dawn patrol on the catwheel!",
-    ),
-    "daytime": (
-        "A daytime dash to brighten things up!",
-        "Midday wheel time—excellent form!",
-    ),
-    "evening": (
-        "An evening spin to close out the day!",
-        "Twilight laps, nicely done!",
+    "high": (
+        10.0,
+        None,
+        (
+            "He's got the zoomies!",
+            "I AM SPEED",
+            "Gotta go fast",
+            "That was fast! Definitely not Miso",
+            "Nyooooom"
+        ),
     ),
 }
-
-
-def time_of_day_message(payload: Mapping[str, Any], local_timezone=None) -> str:
-    """Return a stable, playful message for the run's local completion time."""
-    completed_at = datetime.fromtimestamp(
-        float(payload["time_ns"]), tz=timezone.utc
-    ).astimezone(local_timezone)
-    hour = completed_at.hour
-    if hour < 5 or hour >= 22:
-        period = "overnight"
-    elif hour < 9:
-        period = "early_morning"
-    elif hour < 17:
-        period = "daytime"
-    else:
-        period = "evening"
-    messages = TIME_OF_DAY_MESSAGES[period]
-    run_id = str(payload.get("run_id", ""))
-    choice = hashlib.sha256(f"{period}:{run_id}".encode()).digest()[0] % len(messages)
-    return messages[choice]
+DURATION_REMARKS = {
+    "low": (
+        None,
+        10.0,
+        (
+            "A quick wheel break!",
+            "Keeping things light today",
+        ),
+    ),
+    "high": (
+        60.0,
+        None,
+        (
+            "He's going the distance",
+            "A marathon session on the wheel!",
+            "Endurance champion!",
+            "Ready for the Boston Marathon!",
+        ),
+    ),
+}
+def banded_remark(
+    payload: Mapping[str, Any],
+    value: float,
+    bands: Mapping[str, tuple[float | None, float | None, tuple[str, ...]]],
+    label: str,
+) -> str | None:
+    """Choose a stable message from a matching band, or silence in a dead band."""
+    for band, (lower_bound, upper_bound, messages) in bands.items():
+        if (lower_bound is None or value >= lower_bound) and (
+            upper_bound is None or value <= upper_bound
+        ):
+            run_id = str(payload.get("run_id", ""))
+            choice = hashlib.sha256(f"{label}:{band}:{run_id}".encode()).digest()[0] % len(messages)
+            return messages[choice]
+    return None
 
 
 def performance_remarks(payload: Mapping[str, Any]) -> tuple[str, ...]:
-    """Celebrate runs that exceed the requested speed or endurance markers."""
-    remarks = []
+    """Add one speed and duration band message plus optional record flavor."""
+    max_speed = float(payload["max_speed"])
+    duration = float(payload["run_duration"])
+    band_remarks = (
+        banded_remark(payload, max_speed, SPEED_REMARKS, "speed"),
+        banded_remark(payload, duration, DURATION_REMARKS, "duration"),
+    )
+    remarks = [remark for remark in band_remarks if remark]
     record_breakers = set(payload.get("record_breakers", []))
     if "max_speed" in record_breakers:
-        remarks.append("🏆 New speed record! The wheel has a new blur.")
+        remarks.append("🏆 New speed record!")
     if "run_duration" in record_breakers:
-        remarks.append("⏱️ New duration record! That was a marathon session.")
-    if float(payload["run_duration"]) > 60:
-        remarks.append("Endurance star: over a minute on the wheel!")
-    if float(payload["max_speed"]) > 10:
-        remarks.append("Speed demon alert: over 10 mph!")
+        remarks.append("⏱️ New duration record!")
     return tuple(remarks)
 
 
@@ -89,7 +109,6 @@ def caption_for_run(payload: Mapping[str, Any]) -> str:
     return "\n".join(
         (
             "🐈 Catwheel run complete",
-            time_of_day_message(payload),
             f"Peak speed: {float(payload['max_speed']):.1f} mph",
             f"Average speed: {float(payload['avg_speed']):.1f} mph",
             f"Distance: {float(payload['distance_travelled']):.0f} ft",
