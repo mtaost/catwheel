@@ -76,6 +76,36 @@ for the network, restarts after failures, and writes logs to the system journal.
 To apply a code or configuration change, run `sudo systemctl restart catwheel.service`.
 To stop it from starting at boot, run `sudo systemctl disable --now catwheel.service`.
 
+## Telegram run notifications
+
+The logger can send one speed-graph photo for every completed qualifying run.
+Its caption includes peak and average speed, distance, duration, and a playful
+message based on the logger's local time of day. Runs longer than 60 seconds or
+faster than 10 mph receive an extra endurance or speed-demon remark. It queues
+notifications in the shared state database before delivery, so a temporary
+network or Telegram outage does not affect sensor logging; queued messages are
+retried with backoff and may be delivered more than once after an ambiguous
+failure.
+
+The first qualifying run after enabling Telegram establishes the local record
+baseline. Later runs that exceed its peak speed or duration receive a record
+announcement in their notification.
+
+Create a bot with BotFather, add or start it in the destination direct chat,
+group, or channel, then determine that destination's chat ID. Add both values
+to the protected logger configuration and restart the logger:
+
+```bash
+sudoedit /etc/catwheel/catwheel.env
+sudo systemctl restart catwheel.service
+```
+
+Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` together. Do not put the bot
+token in this repository, shell history, logs, or diagnostics. Leaving both
+keys unset disables Telegram notifications; setting only one causes startup to
+fail with an actionable configuration error. Install the updated Python
+dependencies before restarting after this feature is added.
+
 ## Web dashboard
 
 The dashboard is a separate service for the trusted home LAN. It is available

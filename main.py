@@ -1,6 +1,7 @@
 from catwheellogger import CatwheelLogger
 from dao.influxdb_dao import InfluxDBDAO
 from settings_store import SettingsStore
+from telegram_notifier import publisher_from_environment
 import gpiozero
 import logging
 import os
@@ -27,6 +28,13 @@ def validate_configuration():
     missing = [name for name, value in required_values.items() if not value]
     if missing:
         raise RuntimeError("Missing required configuration: " + ", ".join(missing))
+    telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if bool(telegram_token) != bool(telegram_chat_id):
+        missing_telegram_key = "TELEGRAM_BOT_TOKEN" if not telegram_token else "TELEGRAM_CHAT_ID"
+        raise RuntimeError(
+            f"Telegram notifications require {missing_telegram_key} when enabled"
+        )
 
 
 def main():
@@ -44,7 +52,14 @@ def main():
 
     dao = InfluxDBDAO(url=DATABASE_URL, token=INFLUXDB_TOKEN, org=ORG, bucket=BUCKET)
     settings_store = SettingsStore(CATWHEEL_STATE_DB)
-    catwheel_logger = CatwheelLogger(dao, sensor, logger, settings_store=settings_store)
+    event_publisher = publisher_from_environment(settings_store, logger)
+    catwheel_logger = CatwheelLogger(
+        dao,
+        sensor,
+        logger,
+        settings_store=settings_store,
+        event_publisher=event_publisher,
+    )
 
     def request_shutdown(signum, _frame):
         logger.info("Received signal %s; shutting down.", signum)

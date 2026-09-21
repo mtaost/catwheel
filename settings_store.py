@@ -7,7 +7,8 @@ small pieces of application state that are edited by people or the web app.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import json
 import math
 from pathlib import Path
 import sqlite3
@@ -130,6 +131,24 @@ class SettingsStore:
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (run_id, model_version)
                 );
+                CREATE TABLE IF NOT EXISTS telegram_notification_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    lease_until TEXT,
+                    sent_at TEXT,
+                    last_error TEXT
+                );
+                CREATE INDEX IF NOT EXISTS telegram_notification_outbox_due
+                    ON telegram_notification_outbox (sent_at, next_attempt_at);
+                CREATE TABLE IF NOT EXISTS run_records (
+                    metric TEXT PRIMARY KEY CHECK (metric IN ('max_speed', 'run_duration')),
+                    value REAL NOT NULL,
+                    run_id TEXT NOT NULL,
+                    achieved_at TEXT NOT NULL
+                );
                 """
             )
             row = connection.execute("SELECT singleton FROM detection_settings WHERE singleton = 1").fetchone()
@@ -233,3 +252,104 @@ class SettingsStore:
                 f"SELECT run_id, cat_id FROM run_labels WHERE run_id IN ({placeholders})", run_ids
             ).fetchall()
         return {row["run_id"]: row["cat_id"] for row in rows}
+
+    def enqueue_telegram_notification(self, run_id: str, payload: Mapping[str, Any]) -> None:
+        """Durably enqueue one completion notification per run.
+
+        The payload is retained instead of rendered image data so a retry can
+        generate a fresh PNG without using a shared temporary directory.
+        """
+        now = self._now()
+        notification_payload = dict(payload)
+        with self._connection() as connection:
+            record_breakers = []
+            for metric in ("max_speed", "run_duration"):
+                value = float(notification_payload[metric])
+                current = connection.execute(
+                    "SELECT value FROM run_records WHERE metric = ?", (metric,)
+                ).fetchone()
+                if current is None:
+                    connection.execute(
+                        """
+                        INSERT INTO run_records (metric, value, run_id, achieved_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (metric, value, run_id, now),
+                    )
+                elif value > float(current["value"]):
+                    connection.execute(
+                        """
+                        UPDATE run_records
+                        SET value = ?, run_id = ?, achieved_at = ?
+                        WHERE metric = ?
+                        """,
+                        (value, run_id, now, metric),
+                    )
+                    record_breakers.append(metric)
+            notification_payload["record_breakers"] = record_breakers
+            connection.execute(
+                """
+                INSERT INTO telegram_notification_outbox (
+                    run_id, payload_json, next_attempt_at
+                ) VALUES (?, ?, ?)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (run_id, json.dumps(notification_payload, separators=(",", ":")), now),
+            )
+
+    def claim_due_telegram_notification(
+        self, lease_seconds: float = 60.0, now: datetime | None = None
+    ) -> dict[str, Any] | None:
+        """Atomically lease one due notification for a single send attempt."""
+        now = now or datetime.now(timezone.utc)
+        now_text = now.astimezone(timezone.utc).isoformat()
+        lease_until = (now + timedelta(seconds=lease_seconds)).astimezone(timezone.utc).isoformat()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM telegram_notification_outbox
+                WHERE sent_at IS NULL
+                  AND next_attempt_at <= ?
+                  AND (lease_until IS NULL OR lease_until <= ?)
+                ORDER BY id
+                LIMIT 1
+                """,
+                (now_text, now_text),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                "UPDATE telegram_notification_outbox SET lease_until = ? WHERE id = ?",
+                (lease_until, row["id"]),
+            )
+        notification = dict(row)
+        notification["payload"] = json.loads(notification.pop("payload_json"))
+        return notification
+
+    def mark_telegram_notification_sent(self, notification_id: int) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE telegram_notification_outbox
+                SET sent_at = ?, lease_until = NULL, last_error = NULL
+                WHERE id = ?
+                """,
+                (self._now(), notification_id),
+            )
+
+    def retry_telegram_notification(
+        self, notification_id: int, next_attempt_at: datetime, error: str
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE telegram_notification_outbox
+                SET attempt_count = attempt_count + 1,
+                    next_attempt_at = ?,
+                    lease_until = NULL,
+                    last_error = ?
+                WHERE id = ?
+                """,
+                (next_attempt_at.astimezone(timezone.utc).isoformat(), error[:1000], notification_id),
+            )

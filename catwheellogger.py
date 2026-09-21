@@ -50,6 +50,7 @@ class CatwheelLogger:
         self.logged_wait = False
         self.previous_speed = 0.0
         self.rejected_sample_count = 0
+        self.speed_samples = []
 
     def _sensor_interrupt(self):
         current_time = time.time()
@@ -86,6 +87,9 @@ class CatwheelLogger:
                     self.poll_count += 1
                     self.avg_speed_mps = self.total_speed / self.poll_count
                     self.dao.write_run_data(self.run_id, current_time, speed_mph)
+                    self.speed_samples.append(
+                        {"timestamp": current_time, "speed_mph": speed_mph}
+                    )
                     self.event_publisher.live_speed(
                         {
                             "topic": "catwheel/v1/live-speed",
@@ -131,7 +135,11 @@ class CatwheelLogger:
             }
             self.dao.write_run_metadata(**metadata)
             self.event_publisher.run_completed(
-                {"topic": "catwheel/v1/run-completed", **metadata}
+                {
+                    "topic": "catwheel/v1/run-completed",
+                    **metadata,
+                    "speed_samples": self.speed_samples,
+                }
             )
         else:
             self.log.warning(
@@ -173,6 +181,9 @@ class CatwheelLogger:
             raise
         finally:
             self.log.info("Cleaning up GPIO and database resources.")
+            close_publisher = getattr(self.event_publisher, "close", None)
+            if close_publisher:
+                close_publisher()
             self.sensor.close()
             self.dao.close()
 
