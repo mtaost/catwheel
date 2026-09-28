@@ -39,7 +39,7 @@ SPEED_REMARKS = {
         ),
     ),
     "high": (
-        10.0,
+        11.0,
         None,
         (
             "He's got the zoomies!",
@@ -108,11 +108,11 @@ def caption_for_run(payload: Mapping[str, Any]) -> str:
     """Build the concise caption sent alongside a completed-run speed graph."""
     return "\n".join(
         (
-            "🐈 Catwheel run complete",
-            f"Peak speed: {float(payload['max_speed']):.1f} mph",
-            f"Average speed: {float(payload['avg_speed']):.1f} mph",
-            f"Distance: {float(payload['distance_travelled']):.0f} ft",
-            f"Duration: {float(payload['run_duration']):.0f} s",
+            "** Run complete **",
+            f"Max speed: {float(payload['max_speed']):.1f} mph",
+            f"Avg speed: {float(payload['avg_speed']):.1f} mph",
+            f"Distance:  {float(payload['distance_travelled']):.0f} ft",
+            f"Duration:  {float(payload['run_duration']):.0f} s",
             *performance_remarks(payload),
         )
     )
