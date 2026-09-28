@@ -84,7 +84,8 @@ class LoggerTests(unittest.TestCase):
         self.assertEqual(len(self.logger.speed_samples), 1)
         self.assertEqual(self.logger.speed_samples[0]["timestamp"], 2.0)
 
-    def test_completed_run_records_settings_revision_and_rejections(self):
+    def test_completed_run_records_a_prompt_zero_speed_endpoint(self):
+        run_id = self.logger.run_id
         self.logger.start_time = 10.0
         self.logger.stop_time = 30.0
         self.logger.max_speed_mps = 2.0
@@ -95,8 +96,12 @@ class LoggerTests(unittest.TestCase):
         metadata = self.dao.metadata[0]
         self.assertEqual(metadata["settings_revision"], 1)
         self.assertEqual(metadata["rejected_sample_count"], 2)
+        self.assertEqual(self.dao.samples, [(run_id, 30.0, 0.0)])
         self.assertEqual(len(self.publisher.completed), 1)
-        self.assertEqual(self.publisher.completed[0]["speed_samples"], [])
+        self.assertEqual(
+            self.publisher.completed[0]["speed_samples"],
+            [{"timestamp": 30.0, "speed_mph": 0.0}],
+        )
 
     def test_discarded_run_does_not_publish_completion(self):
         self.logger.start_time = 10.0

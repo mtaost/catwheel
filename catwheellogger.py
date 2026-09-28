@@ -123,6 +123,14 @@ class CatwheelLogger:
             and self.max_speed_mps * self.MPS_TO_MPH >= settings.min_peak_speed_mph
             and self.distance_travelled_m * self.M_TO_FT >= settings.min_distance_ft
         ):
+            # ``stop_time`` is captured by the first idle polls, rather than
+            # when the full idle timeout expires.  Persist the endpoint at
+            # that time so a chart does not interpolate the last measured
+            # speed all the way to the much later timeout.
+            self.dao.write_run_data(self.run_id, self.stop_time, 0.0)
+            self.speed_samples.append(
+                {"timestamp": self.stop_time, "speed_mph": 0.0}
+            )
             metadata = {
                 "run_id": self.run_id,
                 "time_ns": self.stop_time,

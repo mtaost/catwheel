@@ -15,7 +15,8 @@
   let speedChart;
   if (window.Chart && samples.length) {
     if (window.ChartZoom) Chart.register(window.ChartZoom);
-    speedChart = new Chart(document.getElementById('speed-chart'), {type: 'line', data: {labels: samples.map(s => new Date(s.timestamp).toLocaleTimeString()), datasets: [{label: 'Speed (mph)', data: samples.map(s => s.speed_mph), borderColor: '#ffb86c', backgroundColor: 'rgba(255,184,108,.2)', pointRadius: 3, tension: .25}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: true, title: {display: true, text: 'mph'}}}, plugins: {zoom: {pan: {enabled: true, mode: 'x'}, zoom: {wheel: {enabled: true}, pinch: {enabled: true}, drag: {enabled: true}, mode: 'x'}}}}});
+    const startedAt = new Date(samples[0].timestamp).getTime();
+    speedChart = new Chart(document.getElementById('speed-chart'), {type: 'line', data: {datasets: [{label: 'Speed (mph)', data: samples.map(s => ({x: (new Date(s.timestamp).getTime() - startedAt) / 1000, y: s.speed_mph})), borderColor: '#ffb86c', backgroundColor: 'rgba(255,184,108,.2)', pointRadius: 3, stepped: 'after'}]}, options: {responsive: true, maintainAspectRatio: false, scales: {x: {type: 'linear', title: {display: true, text: 'Elapsed time (seconds)'}}, y: {beginAtZero: true, title: {display: true, text: 'mph'}}}, plugins: {zoom: {pan: {enabled: true, mode: 'x'}, zoom: {wheel: {enabled: true}, pinch: {enabled: true}, drag: {enabled: true}, mode: 'x'}}}}});
   }
   document.getElementById('reset-zoom').addEventListener('click', () => speedChart && speedChart.resetZoom());
   document.querySelectorAll('.label-button').forEach(button => button.addEventListener('click', async () => {

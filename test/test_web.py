@@ -82,6 +82,8 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('class="summary-card run-summary"', response.text)
         self.assertLess(response.text.index('id="speed-chart"'), response.text.index('class="summary-card run-summary"'))
+        self.assertIn("stepped: 'after'", response.text)
+        self.assertIn("Elapsed time (seconds)", response.text)
 
     async def test_recent_runs_are_compact_and_paginated(self):
         self.repository.runs = [
