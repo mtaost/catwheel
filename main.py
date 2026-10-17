@@ -2,6 +2,8 @@ from catwheellogger import CatwheelLogger
 from dao.influxdb_dao import InfluxDBDAO
 from settings_store import SettingsStore
 from telegram_notifier import publisher_from_environment
+from daily_summary import DailySummaryScheduler
+from web.data import InfluxRunRepository
 import gpiozero
 import logging
 import os
@@ -35,6 +37,11 @@ def validate_configuration():
         raise RuntimeError(
             f"Telegram notifications require {missing_telegram_key} when enabled"
         )
+    daily_summary_enabled = os.environ.get("TELEGRAM_DAILY_SUMMARY_ENABLED", "false").lower() == "true"
+    if daily_summary_enabled and (not telegram_token or not telegram_chat_id):
+        raise RuntimeError("Telegram daily summaries require Telegram notifications to be enabled")
+    if daily_summary_enabled and not os.environ.get("INFLUXDB_READ_TOKEN"):
+        raise RuntimeError("Telegram daily summaries require INFLUXDB_READ_TOKEN")
 
 
 def main():
@@ -52,7 +59,18 @@ def main():
 
     dao = InfluxDBDAO(url=DATABASE_URL, token=INFLUXDB_TOKEN, org=ORG, bucket=BUCKET)
     settings_store = SettingsStore(CATWHEEL_STATE_DB)
-    event_publisher = publisher_from_environment(settings_store, logger)
+    daily_summary_scheduler = None
+    if os.environ.get("TELEGRAM_DAILY_SUMMARY_ENABLED", "false").lower() == "true":
+        repository = InfluxRunRepository(
+            DATABASE_URL, os.environ["INFLUXDB_READ_TOKEN"], ORG, BUCKET
+        )
+        daily_summary_scheduler = DailySummaryScheduler(
+            settings_store,
+            repository,
+            os.environ.get("DAILY_SUMMARY_TIME_ZONE", "America/New_York"),
+            logger,
+        )
+    event_publisher = publisher_from_environment(settings_store, logger, daily_summary_scheduler)
     catwheel_logger = CatwheelLogger(
         dao,
         sensor,

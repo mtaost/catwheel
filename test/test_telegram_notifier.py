@@ -70,8 +70,8 @@ class TelegramNotifierTests(unittest.TestCase):
 
     def test_caption_and_png_rendering(self):
         caption = caption_for_run(PAYLOAD)
-        self.assertIn("🐈 Catwheel run complete", caption)
-        self.assertIn("Peak speed: 8.5 mph", caption)
+        self.assertIn("** Run complete **", caption)
+        self.assertIn("Max speed: 8.5 mph", caption)
         self.assertEqual(performance_remarks(PAYLOAD), ())
         image = render_speed_graph(PAYLOAD)
         self.assertTrue(image.startswith(b"\x89PNG\r\n\x1a\n"))
@@ -79,15 +79,12 @@ class TelegramNotifierTests(unittest.TestCase):
     def test_performance_copy(self):
         low_short = {**PAYLOAD, "max_speed": 3.0, "run_duration": 8.0}
         dead_band = {**PAYLOAD, "max_speed": 6.0, "run_duration": 40.0}
-        high_long = {**PAYLOAD, "max_speed": 10.1, "run_duration": 60.1}
+        high_long = {**PAYLOAD, "max_speed": 11.1, "run_duration": 60.1}
         self.assertIn(performance_remarks(low_short)[0], SPEED_REMARKS["low"][2])
         self.assertIn(performance_remarks(low_short)[1], DURATION_REMARKS["low"][2])
         self.assertEqual(performance_remarks(dead_band), ())
         self.assertIn(performance_remarks(high_long)[0], SPEED_REMARKS["high"][2])
         self.assertIn(performance_remarks(high_long)[1], DURATION_REMARKS["high"][2])
-        self.assertEqual(
-            performance_remarks(high_long)[-1], "Speed demon alert: over 10 mph!"
-        )
 
     def test_new_speed_and_duration_records_are_added_to_the_outbox_payload(self):
         first = {**PAYLOAD, "run_id": "first-run"}
@@ -99,7 +96,7 @@ class TelegramNotifierTests(unittest.TestCase):
         record_breaker = {
             **PAYLOAD,
             "run_id": "record-run",
-            "max_speed": 10.5,
+            "max_speed": 11.5,
             "run_duration": 70.0,
         }
         self.store.enqueue_telegram_notification(record_breaker["run_id"], record_breaker)
@@ -112,9 +109,8 @@ class TelegramNotifierTests(unittest.TestCase):
             (
                 performance_remarks(record_breaker)[0],
                 performance_remarks(record_breaker)[1],
-                "🏆 New speed record! The wheel has a new blur.",
-                "⏱️ New duration record! That was a marathon session.",
-                "Speed demon alert: over 10 mph!",
+                "🏆 New speed record!",
+                "⏱️ New duration record!",
             ),
         )
 
@@ -130,13 +126,33 @@ class TelegramNotifierTests(unittest.TestCase):
         url, request = client.posts[0]
         self.assertTrue(url.endswith("/botsecret-token/sendPhoto"))
         self.assertEqual(request["data"]["chat_id"], "-100123")
-        self.assertIn("Peak speed: 8.5 mph", request["data"]["caption"])
+        self.assertIn("Max speed: 8.5 mph", request["data"]["caption"])
         filename, image, content_type = request["files"]["photo"]
         self.assertEqual((filename, content_type), ("catwheel-speed.png", "image/png"))
         self.assertTrue(image.startswith(b"\x89PNG"))
         row = self._outbox_row()
         self.assertIsNotNone(row[2])
         self.assertEqual(row[0], 0)
+
+    def test_daily_summary_payload_sends_histogram_photo(self):
+        payload = {
+            "topic": "catwheel/v1/daily-summary",
+            "summary_date": "2026-09-20",
+            "run_count": 3,
+            "total_distance_ft": 250.0,
+            "max_speed_mph": 11.2,
+            "hourly_run_counts": [0] * 24,
+        }
+        client = RecordingClient()
+        publisher = TelegramEventPublisher(
+            self.store, "secret-token", "-100123", http_client=client, start_worker=False
+        )
+        self.store.enqueue_telegram_payload("daily-summary:2026-09-20", payload)
+        self.assertTrue(publisher.process_next_notification())
+        _url, request = client.posts[0]
+        self.assertIn("Daily summary", request["data"]["caption"])
+        filename, _image, content_type = request["files"]["photo"]
+        self.assertEqual((filename, content_type), ("catwheel-daily-summary.png", "image/png"))
 
     def test_retry_honors_telegram_retry_after_and_survives_restart(self):
         failed_client = RecordingClient(429, {"ok": False, "parameters": {"retry_after": 37}})

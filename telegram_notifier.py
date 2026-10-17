@@ -23,6 +23,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
 from events import NullEventPublisher
+from daily_summary import daily_summary_caption, render_daily_histogram
 
 
 TELEGRAM_API_URL = "https://api.telegram.org"
@@ -187,6 +188,7 @@ class TelegramEventPublisher:
         *,
         http_client: httpx.Client | None = None,
         start_worker: bool = True,
+        daily_summary_scheduler=None,
     ):
         if not bot_token or not chat_id:
             raise ValueError("Telegram bot token and chat ID are both required")
@@ -199,6 +201,7 @@ class TelegramEventPublisher:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
+        self._daily_summary_scheduler = daily_summary_scheduler
         if start_worker:
             self._worker = threading.Thread(
                 target=self._run_worker,
@@ -226,10 +229,19 @@ class TelegramEventPublisher:
             self._worker.join(timeout=20.0)
         if self._owns_http_client:
             self._http.close()
+        close_repository = getattr(getattr(self._daily_summary_scheduler, "repository", None), "close", None)
+        if close_repository:
+            close_repository()
 
     def _run_worker(self) -> None:
         while not self._stop.is_set():
-            if self.process_next_notification():
+            sent_notification = self.process_next_notification()
+            processed_summary = (
+                self._daily_summary_scheduler.process_due_summary()
+                if self._daily_summary_scheduler
+                else False
+            )
+            if sent_notification or processed_summary:
                 continue
             self._wake.wait(POLL_INTERVAL_SECONDS)
             self._wake.clear()
@@ -273,13 +285,39 @@ class TelegramEventPublisher:
             str(description), retry_after=self._server_retry_after(response_data)
         )
 
+    def _send_daily_summary(self, payload: Mapping[str, Any]) -> None:
+        response = self._http.post(
+            f"{TELEGRAM_API_URL}/bot{self.bot_token}/sendPhoto",
+            data={"chat_id": self.chat_id, "caption": daily_summary_caption(dict(payload))},
+            files={"photo": ("catwheel-daily-summary.png", render_daily_histogram(dict(payload)), "image/png")},
+        )
+        response_data: Any | None = None
+        try:
+            response_data = response.json()
+        except ValueError:
+            pass
+        if response.is_success and isinstance(response_data, dict) and response_data.get("ok") is True:
+            return
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise TelegramDeliveryError(
+                f"Telegram responded with HTTP {response.status_code}",
+                retry_after=self._server_retry_after(response_data),
+            ) from exc
+        description = response_data.get("description", "Telegram rejected the notification") if isinstance(response_data, dict) else "Telegram returned an invalid response"
+        raise TelegramDeliveryError(str(description), retry_after=self._server_retry_after(response_data))
+
     def process_next_notification(self) -> bool:
         """Attempt one due notification; exposed for deterministic tests."""
         notification = self.store.claim_due_telegram_notification()
         if notification is None:
             return False
         try:
-            self._send_photo(notification["payload"])
+            if notification["payload"].get("topic") == "catwheel/v1/daily-summary":
+                self._send_daily_summary(notification["payload"])
+            else:
+                self._send_photo(notification["payload"])
         except Exception as exc:
             response_delay = exc.retry_after if isinstance(exc, TelegramDeliveryError) else None
             delay = response_delay or self._retry_delay(notification["attempt_count"])
@@ -307,7 +345,7 @@ class TelegramDeliveryError(RuntimeError):
         self.retry_after = retry_after
 
 
-def publisher_from_environment(store, logger: logging.Logger | None = None):
+def publisher_from_environment(store, logger: logging.Logger | None = None, daily_summary_scheduler=None):
     """Return the opt-in publisher or a no-op publisher when Telegram is unset."""
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -316,4 +354,4 @@ def publisher_from_environment(store, logger: logging.Logger | None = None):
     if not bot_token or not chat_id:
         missing = "TELEGRAM_BOT_TOKEN" if not bot_token else "TELEGRAM_CHAT_ID"
         raise RuntimeError(f"Telegram notifications require {missing} when enabled")
-    return TelegramEventPublisher(store, bot_token, chat_id, logger)
+    return TelegramEventPublisher(store, bot_token, chat_id, logger, daily_summary_scheduler=daily_summary_scheduler)

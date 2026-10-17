@@ -107,6 +107,16 @@ keys unset disables Telegram notifications; setting only one causes startup to
 fail with an actionable configuration error. Install the updated Python
 dependencies before restarting after this feature is added.
 
+### Daily Telegram summary
+
+Set `TELEGRAM_DAILY_SUMMARY_ENABLED=true` plus a read-only
+`INFLUXDB_READ_TOKEN` in `/etc/catwheel/catwheel.env` to send a prior-day
+summary at 12:05 AM in `DAILY_SUMMARY_TIME_ZONE` (default:
+`America/New_York`). It reports run count, total distance, peak speed, and a
+24-hour local-time histogram. The summary is calculated from InfluxDB metadata,
+saved to the same durable Telegram outbox, and retried without re-querying
+InfluxDB after a successful calculation.
+
 ## Web dashboard
 
 The dashboard is a separate service for the trusted home LAN. It is available

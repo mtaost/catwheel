@@ -149,6 +149,14 @@ class SettingsStore:
                     run_id TEXT NOT NULL,
                     achieved_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS telegram_daily_summary_jobs (
+                    summary_date TEXT PRIMARY KEY,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    lease_until TEXT,
+                    completed_at TEXT,
+                    last_error TEXT
+                );
                 """
             )
             row = connection.execute("SELECT singleton FROM detection_settings WHERE singleton = 1").fetchone()
@@ -253,6 +261,24 @@ class SettingsStore:
             ).fetchall()
         return {row["run_id"]: row["cat_id"] for row in rows}
 
+    def _enqueue_telegram_payload(
+        self, connection: sqlite3.Connection, notification_key: str, payload: Mapping[str, Any], now: str
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO telegram_notification_outbox (
+                run_id, payload_json, next_attempt_at
+            ) VALUES (?, ?, ?)
+            ON CONFLICT(run_id) DO NOTHING
+            """,
+            (notification_key, json.dumps(dict(payload), separators=(",", ":")), now),
+        )
+
+    def enqueue_telegram_payload(self, notification_key: str, payload: Mapping[str, Any]) -> None:
+        """Queue a generic Telegram payload without applying run-record logic."""
+        with self._connection() as connection:
+            self._enqueue_telegram_payload(connection, notification_key, payload, self._now())
+
     def enqueue_telegram_notification(self, run_id: str, payload: Mapping[str, Any]) -> None:
         """Durably enqueue one completion notification per run.
 
@@ -287,15 +313,7 @@ class SettingsStore:
                     )
                     record_breakers.append(metric)
             notification_payload["record_breakers"] = record_breakers
-            connection.execute(
-                """
-                INSERT INTO telegram_notification_outbox (
-                    run_id, payload_json, next_attempt_at
-                ) VALUES (?, ?, ?)
-                ON CONFLICT(run_id) DO NOTHING
-                """,
-                (run_id, json.dumps(notification_payload, separators=(",", ":")), now),
-            )
+            self._enqueue_telegram_payload(connection, run_id, notification_payload, now)
 
     def claim_due_telegram_notification(
         self, lease_seconds: float = 60.0, now: datetime | None = None
@@ -352,4 +370,66 @@ class SettingsStore:
                 WHERE id = ?
                 """,
                 (next_attempt_at.astimezone(timezone.utc).isoformat(), error[:1000], notification_id),
+            )
+
+    def ensure_daily_summary_job(self, summary_date: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO telegram_daily_summary_jobs (summary_date, next_attempt_at)
+                VALUES (?, ?)
+                ON CONFLICT(summary_date) DO NOTHING
+                """,
+                (summary_date, self._now()),
+            )
+
+    def claim_due_daily_summary_job(
+        self, lease_seconds: float = 60.0, now: datetime | None = None
+    ) -> dict[str, Any] | None:
+        now = now or datetime.now(timezone.utc)
+        now_text = now.astimezone(timezone.utc).isoformat()
+        lease_until = (now + timedelta(seconds=lease_seconds)).astimezone(timezone.utc).isoformat()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM telegram_daily_summary_jobs
+                WHERE completed_at IS NULL AND next_attempt_at <= ?
+                  AND (lease_until IS NULL OR lease_until <= ?)
+                ORDER BY summary_date
+                LIMIT 1
+                """,
+                (now_text, now_text),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                "UPDATE telegram_daily_summary_jobs SET lease_until = ? WHERE summary_date = ?",
+                (lease_until, row["summary_date"]),
+            )
+        return dict(row)
+
+    def complete_daily_summary_job(self, summary_date: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE telegram_daily_summary_jobs
+                SET completed_at = ?, lease_until = NULL, last_error = NULL
+                WHERE summary_date = ?
+                """,
+                (self._now(), summary_date),
+            )
+
+    def retry_daily_summary_job(
+        self, summary_date: str, next_attempt_at: datetime, error: str
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE telegram_daily_summary_jobs
+                SET attempt_count = attempt_count + 1, next_attempt_at = ?,
+                    lease_until = NULL, last_error = ?
+                WHERE summary_date = ?
+                """,
+                (next_attempt_at.astimezone(timezone.utc).isoformat(), error[:1000], summary_date),
             )
