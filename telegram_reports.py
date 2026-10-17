@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from io import BytesIO
+import re
 from zoneinfo import ZoneInfo
 
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -27,8 +28,8 @@ HELP_TEXT = "\n".join(
     (
         "Catwheel reports",
         "/weekly — last 7 days of run counts",
-        "/hist <n> <hr|day|mo> — run-count histogram (for example: /hist 24 hr)",
-        "/heatmap <n> <day|mo> — activity by date and hour (for example: /heatmap 30 day)",
+        "/hist <n><h|d|mo> — run-count histogram (for example: /hist 24h)",
+        "/heatmap <n><d|mo> — activity by date and hour (for example: /heatmap 30d)",
     )
 )
 
@@ -49,15 +50,22 @@ def parse_report_command(text: str) -> ReportRequest | None:
         return ReportRequest("hist", 7, "day")
     if command not in {"/hist", "/heatmap"}:
         return None
-    if len(tokens) != 3:
-        raise ReportCommandError(f"Usage: {command} <n> <hr|day|mo>")
-    try:
-        count = int(tokens[1])
-    except ValueError as exc:
-        raise ReportCommandError("n must be a whole number.") from exc
-    unit = tokens[2].lower()
-    if unit not in {"hr", "day", "mo"}:
-        raise ReportCommandError("Unit must be hr, day, or mo.")
+    if len(tokens) == 2:
+        match = re.fullmatch(r"(\d+)(h|d|mo)", tokens[1].lower())
+        if not match:
+            raise ReportCommandError(f"Usage: {command} <n><h|d|mo>")
+        count = int(match.group(1))
+        unit = {"h": "hr", "d": "day", "mo": "mo"}[match.group(2)]
+    elif len(tokens) == 3:
+        try:
+            count = int(tokens[1])
+        except ValueError as exc:
+            raise ReportCommandError("n must be a whole number.") from exc
+        unit = {"hr": "hr", "day": "day", "mo": "mo"}.get(tokens[2].lower())
+        if unit is None:
+            raise ReportCommandError("Unit must be hr, day, or mo.")
+    else:
+        raise ReportCommandError(f"Usage: {command} <n><h|d|mo>")
     limits = {"hr": 168, "day": 365, "mo": 24}
     if not 1 <= count <= limits[unit]:
         raise ReportCommandError(f"n must be between 1 and {limits[unit]} for {unit}.")

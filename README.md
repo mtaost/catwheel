@@ -128,10 +128,10 @@ Telegram chat only. This uses the same required `INFLUXDB_READ_TOKEN` as the
 scheduled summaries:
 
 - `/weekly` returns a seven-day run-count histogram and summary.
-- `/hist <n> <hr|day|mo>` returns a run-count histogram, for example
-  `/hist 24 hr` or `/hist 12 mo`.
-- `/heatmap <n> <day|mo>` returns a date-by-local-hour heat map, where darker
-  cells show more completed runs, for example `/heatmap 30 day`.
+- `/hist <n><h|d|mo>` returns a run-count histogram, for example `/hist 24h`
+  or `/hist 12mo`.
+- `/heatmap <n><d|mo>` returns a date-by-local-hour heat map, where darker
+  cells show more completed runs, for example `/heatmap 30d`.
 
 Set `TELEGRAM_REPORT_TIME_ZONE` if the report zone should differ from
 `DAILY_SUMMARY_TIME_ZONE`; otherwise it inherits that zone. `/help` displays
