@@ -9,6 +9,7 @@ import logging
 import os
 import threading
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -24,10 +25,22 @@ from matplotlib.figure import Figure
 
 from events import NullEventPublisher
 from daily_summary import daily_summary_caption, render_daily_histogram
+from daily_summary import render_weekly_histogram, weekly_summary_caption
+from telegram_reports import (
+    HELP_TEXT,
+    ReportCommandError,
+    histogram_counts,
+    parse_report_command,
+    render_activity_heatmap,
+    render_histogram,
+    report_caption,
+    report_window,
+)
 
 
 TELEGRAM_API_URL = "https://api.telegram.org"
 POLL_INTERVAL_SECONDS = 30.0
+COMMAND_POLL_TIMEOUT_SECONDS = 20
 INITIAL_RETRY_SECONDS = 5.0
 MAX_RETRY_SECONDS = 60.0 * 60.0
 SPEED_REMARKS = {
@@ -186,6 +199,8 @@ class TelegramEventPublisher:
         chat_id: str,
         logger: logging.Logger | None = None,
         *,
+        run_repository=None,
+        report_timezone: str | None = None,
         http_client: httpx.Client | None = None,
         start_worker: bool = True,
         daily_summary_scheduler=None,
@@ -196,12 +211,15 @@ class TelegramEventPublisher:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.log = logger or logging.getLogger(__name__)
+        self.run_repository = run_repository
+        self.report_timezone = ZoneInfo(report_timezone) if report_timezone else datetime.now().astimezone().tzinfo
         self._http = http_client or httpx.Client(timeout=httpx.Timeout(15.0))
         self._owns_http_client = http_client is None
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._daily_summary_scheduler = daily_summary_scheduler
+        self._command_worker: threading.Thread | None = None
         if start_worker:
             self._worker = threading.Thread(
                 target=self._run_worker,
@@ -209,6 +227,13 @@ class TelegramEventPublisher:
                 daemon=True,
             )
             self._worker.start()
+            if self.run_repository is not None:
+                self._command_worker = threading.Thread(
+                    target=self._run_command_worker,
+                    name="catwheel-telegram-commands",
+                    daemon=True,
+                )
+                self._command_worker.start()
 
     def live_speed(self, payload: dict) -> None:
         """Telegram only publishes final, qualifying runs in version one."""
@@ -227,6 +252,8 @@ class TelegramEventPublisher:
         self._wake.set()
         if self._worker and self._worker.is_alive():
             self._worker.join(timeout=20.0)
+        if self._command_worker and self._command_worker.is_alive():
+            self._command_worker.join(timeout=COMMAND_POLL_TIMEOUT_SECONDS + 5)
         if self._owns_http_client:
             self._http.close()
         close_repository = getattr(getattr(self._daily_summary_scheduler, "repository", None), "close", None)
@@ -245,6 +272,80 @@ class TelegramEventPublisher:
                 continue
             self._wake.wait(POLL_INTERVAL_SECONDS)
             self._wake.clear()
+
+    def _run_command_worker(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.process_command_updates()
+            except Exception as exc:
+                self.log.warning("Telegram command poll failed: %s", str(exc).replace(self.bot_token, "[redacted]"))
+                self._stop.wait(POLL_INTERVAL_SECONDS)
+
+    def process_command_updates(self) -> int:
+        """Process a batch of configured-chat commands; exposed for tests."""
+        if self.run_repository is None:
+            return 0
+        response = self._http.get(
+            f"{TELEGRAM_API_URL}/bot{self.bot_token}/getUpdates",
+            params={
+                "offset": self.store.telegram_update_offset(),
+                "timeout": COMMAND_POLL_TIMEOUT_SECONDS,
+                "allowed_updates": ["message"],
+            },
+        )
+        data = response.json()
+        if not response.is_success or not isinstance(data, dict) or data.get("ok") is not True:
+            response.raise_for_status()
+            raise TelegramDeliveryError("Telegram rejected getUpdates")
+        handled = 0
+        for update in data.get("result", []):
+            update_id = update.get("update_id")
+            if isinstance(update_id, int):
+                self.store.set_telegram_update_offset(update_id + 1)
+            message = update.get("message") if isinstance(update, dict) else None
+            if not isinstance(message, dict) or str(message.get("chat", {}).get("id")) != str(self.chat_id):
+                continue
+            text = message.get("text")
+            if isinstance(text, str):
+                self._respond_to_command(text)
+                handled += 1
+        return handled
+
+    def _respond_to_command(self, text: str) -> None:
+        try:
+            request = parse_report_command(text)
+            if request is None:
+                return
+            if request.kind == "help":
+                self._send_message(HELP_TEXT)
+                return
+            start, stop = report_window(request, datetime.now(timezone.utc), self.report_timezone)
+            runs = self.run_repository.completed_runs(start, stop)
+            if request.kind == "hist":
+                counts = histogram_counts(runs, start, stop, request.unit, self.report_timezone)
+                title = "Weekly catwheel report" if text.split()[0].split("@", 1)[0].lower() == "/weekly" else "Catwheel run count"
+                image = render_histogram(counts, request.unit, title)
+            else:
+                title = "Catwheel activity heat map"
+                image = render_activity_heatmap(runs, start, stop, self.report_timezone)
+            self._send_photo_bytes(image, report_caption(title, runs, start, stop, self.report_timezone))
+        except ReportCommandError as exc:
+            self._send_message(f"{exc}\n\n{HELP_TEXT}")
+        except Exception as exc:
+            self.log.exception("Unable to generate Telegram report: %s", str(exc).replace(self.bot_token, "[redacted]"))
+            self._send_message("I couldn't generate that report. Please try again shortly.")
+
+    def _send_message(self, text: str) -> None:
+        response = self._http.post(f"{TELEGRAM_API_URL}/bot{self.bot_token}/sendMessage", data={"chat_id": self.chat_id, "text": text})
+        response.raise_for_status()
+
+    def _send_photo_bytes(self, image: bytes, caption: str) -> None:
+        response = self._http.post(
+            f"{TELEGRAM_API_URL}/bot{self.bot_token}/sendPhoto",
+            data={"chat_id": self.chat_id, "caption": caption},
+            files={"photo": ("catwheel-report.png", image, "image/png")},
+        )
+        response.raise_for_status()
 
     @staticmethod
     def _retry_delay(attempt_count: int, response_data: Any | None = None) -> float:
@@ -308,6 +409,14 @@ class TelegramEventPublisher:
         description = response_data.get("description", "Telegram rejected the notification") if isinstance(response_data, dict) else "Telegram returned an invalid response"
         raise TelegramDeliveryError(str(description), retry_after=self._server_retry_after(response_data))
 
+    def _send_weekly_summary(self, payload: Mapping[str, Any]) -> None:
+        response = self._http.post(
+            f"{TELEGRAM_API_URL}/bot{self.bot_token}/sendPhoto",
+            data={"chat_id": self.chat_id, "caption": weekly_summary_caption(dict(payload))},
+            files={"photo": ("catwheel-weekly-summary.png", render_weekly_histogram(dict(payload)), "image/png")},
+        )
+        response.raise_for_status()
+
     def process_next_notification(self) -> bool:
         """Attempt one due notification; exposed for deterministic tests."""
         notification = self.store.claim_due_telegram_notification()
@@ -316,6 +425,8 @@ class TelegramEventPublisher:
         try:
             if notification["payload"].get("topic") == "catwheel/v1/daily-summary":
                 self._send_daily_summary(notification["payload"])
+            elif notification["payload"].get("topic") == "catwheel/v1/weekly-summary":
+                self._send_weekly_summary(notification["payload"])
             else:
                 self._send_photo(notification["payload"])
         except Exception as exc:
@@ -345,7 +456,7 @@ class TelegramDeliveryError(RuntimeError):
         self.retry_after = retry_after
 
 
-def publisher_from_environment(store, logger: logging.Logger | None = None, daily_summary_scheduler=None):
+def publisher_from_environment(store, logger: logging.Logger | None = None, daily_summary_scheduler=None, *, run_repository=None, report_timezone: str | None = None):
     """Return the opt-in publisher or a no-op publisher when Telegram is unset."""
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -354,4 +465,4 @@ def publisher_from_environment(store, logger: logging.Logger | None = None, dail
     if not bot_token or not chat_id:
         missing = "TELEGRAM_BOT_TOKEN" if not bot_token else "TELEGRAM_CHAT_ID"
         raise RuntimeError(f"Telegram notifications require {missing} when enabled")
-    return TelegramEventPublisher(store, bot_token, chat_id, logger, daily_summary_scheduler=daily_summary_scheduler)
+    return TelegramEventPublisher(store, bot_token, chat_id, logger, daily_summary_scheduler=daily_summary_scheduler, run_repository=run_repository, report_timezone=report_timezone)

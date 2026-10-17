@@ -157,6 +157,18 @@ class SettingsStore:
                     completed_at TEXT,
                     last_error TEXT
                 );
+                CREATE TABLE IF NOT EXISTS telegram_weekly_summary_jobs (
+                    summary_week_start TEXT PRIMARY KEY,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    lease_until TEXT,
+                    completed_at TEXT,
+                    last_error TEXT
+                );
+                CREATE TABLE IF NOT EXISTS telegram_bot_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
             row = connection.execute("SELECT singleton FROM detection_settings WHERE singleton = 1").fetchone()
@@ -432,4 +444,83 @@ class SettingsStore:
                 WHERE summary_date = ?
                 """,
                 (next_attempt_at.astimezone(timezone.utc).isoformat(), error[:1000], summary_date),
+            )
+
+    def ensure_weekly_summary_job(self, summary_week_start: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO telegram_weekly_summary_jobs (summary_week_start, next_attempt_at)
+                VALUES (?, ?)
+                ON CONFLICT(summary_week_start) DO NOTHING
+                """,
+                (summary_week_start, self._now()),
+            )
+
+    def claim_due_weekly_summary_job(
+        self, lease_seconds: float = 60.0, now: datetime | None = None
+    ) -> dict[str, Any] | None:
+        now = now or datetime.now(timezone.utc)
+        now_text = now.astimezone(timezone.utc).isoformat()
+        lease_until = (now + timedelta(seconds=lease_seconds)).astimezone(timezone.utc).isoformat()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM telegram_weekly_summary_jobs
+                WHERE completed_at IS NULL AND next_attempt_at <= ?
+                  AND (lease_until IS NULL OR lease_until <= ?)
+                ORDER BY summary_week_start
+                LIMIT 1
+                """,
+                (now_text, now_text),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                "UPDATE telegram_weekly_summary_jobs SET lease_until = ? WHERE summary_week_start = ?",
+                (lease_until, row["summary_week_start"]),
+            )
+        return dict(row)
+
+    def complete_weekly_summary_job(self, summary_week_start: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE telegram_weekly_summary_jobs
+                SET completed_at = ?, lease_until = NULL, last_error = NULL
+                WHERE summary_week_start = ?
+                """,
+                (self._now(), summary_week_start),
+            )
+
+    def retry_weekly_summary_job(
+        self, summary_week_start: str, next_attempt_at: datetime, error: str
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE telegram_weekly_summary_jobs
+                SET attempt_count = attempt_count + 1, next_attempt_at = ?,
+                    lease_until = NULL, last_error = ?
+                WHERE summary_week_start = ?
+                """,
+                (next_attempt_at.astimezone(timezone.utc).isoformat(), error[:1000], summary_week_start),
+            )
+
+    def telegram_update_offset(self) -> int | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT value FROM telegram_bot_state WHERE key = 'update_offset'"
+            ).fetchone()
+        return int(row["value"]) if row else None
+
+    def set_telegram_update_offset(self, offset: int) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO telegram_bot_state (key, value) VALUES ('update_offset', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(offset),),
             )
