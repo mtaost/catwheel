@@ -117,6 +117,26 @@ summary at 12:05 AM in `DAILY_SUMMARY_TIME_ZONE` (default:
 saved to the same durable Telegram outbox, and retried without re-querying
 InfluxDB after a successful calculation.
 
+### Weekly Telegram summary and history commands
+
+Set `TELEGRAM_WEEKLY_SUMMARY_ENABLED=true` to send the same style of durable
+report every Monday at 12:05 AM for the previous Monday–Sunday window. Its
+histogram shows completed runs by local day.
+
+Set `TELEGRAM_COMMANDS_ENABLED=true` to allow commands from the configured
+Telegram chat only. This uses the same required `INFLUXDB_READ_TOKEN` as the
+scheduled summaries:
+
+- `/weekly` returns a seven-day run-count histogram and summary.
+- `/hist <n><h|d|mo>` returns a run-count histogram, for example `/hist 24h`
+  or `/hist 12mo`.
+- `/heatmap <n><d|mo>` returns a date-by-local-hour heat map, where darker
+  cells show more completed runs, for example `/heatmap 30d`.
+
+Set `TELEGRAM_REPORT_TIME_ZONE` if the report zone should differ from
+`DAILY_SUMMARY_TIME_ZONE`; otherwise it inherits that zone. `/help` displays
+the command reference in Telegram.
+
 ## Web dashboard
 
 The dashboard is a separate service for the trusted home LAN. It is available

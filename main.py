@@ -38,10 +38,12 @@ def validate_configuration():
             f"Telegram notifications require {missing_telegram_key} when enabled"
         )
     daily_summary_enabled = os.environ.get("TELEGRAM_DAILY_SUMMARY_ENABLED", "false").lower() == "true"
-    if daily_summary_enabled and (not telegram_token or not telegram_chat_id):
-        raise RuntimeError("Telegram daily summaries require Telegram notifications to be enabled")
-    if daily_summary_enabled and not os.environ.get("INFLUXDB_READ_TOKEN"):
-        raise RuntimeError("Telegram daily summaries require INFLUXDB_READ_TOKEN")
+    weekly_summary_enabled = os.environ.get("TELEGRAM_WEEKLY_SUMMARY_ENABLED", "false").lower() == "true"
+    commands_enabled = os.environ.get("TELEGRAM_COMMANDS_ENABLED", "false").lower() == "true"
+    if (daily_summary_enabled or weekly_summary_enabled or commands_enabled) and (not telegram_token or not telegram_chat_id):
+        raise RuntimeError("Telegram summaries and commands require Telegram notifications to be enabled")
+    if (daily_summary_enabled or weekly_summary_enabled or commands_enabled) and not os.environ.get("INFLUXDB_READ_TOKEN"):
+        raise RuntimeError("Telegram summaries and commands require INFLUXDB_READ_TOKEN")
 
 
 def main():
@@ -59,18 +61,31 @@ def main():
 
     dao = InfluxDBDAO(url=DATABASE_URL, token=INFLUXDB_TOKEN, org=ORG, bucket=BUCKET)
     settings_store = SettingsStore(CATWHEEL_STATE_DB)
-    daily_summary_scheduler = None
-    if os.environ.get("TELEGRAM_DAILY_SUMMARY_ENABLED", "false").lower() == "true":
+    daily_summary_enabled = os.environ.get("TELEGRAM_DAILY_SUMMARY_ENABLED", "false").lower() == "true"
+    weekly_summary_enabled = os.environ.get("TELEGRAM_WEEKLY_SUMMARY_ENABLED", "false").lower() == "true"
+    commands_enabled = os.environ.get("TELEGRAM_COMMANDS_ENABLED", "false").lower() == "true"
+    repository = None
+    if daily_summary_enabled or weekly_summary_enabled or commands_enabled:
         repository = InfluxRunRepository(
             DATABASE_URL, os.environ["INFLUXDB_READ_TOKEN"], ORG, BUCKET
         )
+    daily_summary_scheduler = None
+    if daily_summary_enabled or weekly_summary_enabled:
         daily_summary_scheduler = DailySummaryScheduler(
             settings_store,
             repository,
             os.environ.get("DAILY_SUMMARY_TIME_ZONE", "America/New_York"),
             logger,
+            daily_enabled=daily_summary_enabled,
+            weekly_enabled=weekly_summary_enabled,
         )
-    event_publisher = publisher_from_environment(settings_store, logger, daily_summary_scheduler)
+    event_publisher = publisher_from_environment(
+        settings_store,
+        logger,
+        daily_summary_scheduler,
+        run_repository=repository if commands_enabled else None,
+        report_timezone=os.environ.get("TELEGRAM_REPORT_TIME_ZONE", os.environ.get("DAILY_SUMMARY_TIME_ZONE")),
+    )
     catwheel_logger = CatwheelLogger(
         dao,
         sensor,

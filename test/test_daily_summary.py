@@ -11,6 +11,9 @@ from daily_summary import (
     build_daily_summary,
     daily_summary_caption,
     render_daily_histogram,
+    build_weekly_summary,
+    render_weekly_histogram,
+    weekly_summary_caption,
 )
 from settings_store import SettingsStore
 
@@ -69,3 +72,20 @@ class DailySummaryTests(unittest.TestCase):
         self.assertFalse(
             scheduler.process_due_summary(datetime(2026, 9, 21, 0, 6, tzinfo=self.zone))
         )
+
+    def test_scheduler_queues_prior_week_on_monday(self):
+        repository = FakeRepository(self.runs)
+        scheduler = DailySummaryScheduler(
+            self.store, repository, "America/New_York", weekly_enabled=True
+        )
+        self.assertTrue(
+            scheduler.process_due_summary(datetime(2026, 9, 21, 0, 5, tzinfo=self.zone))
+        )
+        notifications = []
+        while notification := self.store.claim_due_telegram_notification():
+            notifications.append(notification)
+            self.store.mark_telegram_notification_sent(notification["id"])
+        weekly = next(item for item in notifications if item["payload"]["topic"] == "catwheel/v1/weekly-summary")
+        self.assertEqual(weekly["run_id"], "weekly-summary:2026-09-14")
+        self.assertTrue(render_weekly_histogram(weekly["payload"]).startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertIn("Weekly summary", weekly_summary_caption(weekly["payload"]))
